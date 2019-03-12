@@ -27,6 +27,7 @@ var (
 	accountFile  string
 	certFile     string
 	keyFile      string
+	nsKeyFile    string
 )
 
 type acmeAccountFile struct {
@@ -34,12 +35,18 @@ type acmeAccountFile struct {
 	URL        string            `json:"url"`
 }
 
-func nsUpdate(rr string, challenge string) error {
-	cmd := exec.Command("nsupdate", rr, challenge)
-	buf := bytes.NewBufferString("update add ")
+func nsUpdate(rr string, challenge string, addDelete string) error {
+	cmd := exec.Command("nsupdate", "-v", "-k", nsKeyFile)
+	buf := bytes.NewBufferString("update ")
+	buf.WriteString(addDelete)
+	buf.WriteString(" ")
 	buf.WriteString(rr)
-	buf.WriteString("300 TXT ")
-	buf.WriteString(challenge)
+	if addDelete == "add" {
+		buf.WriteString(" 300 TXT ")
+		buf.WriteString(challenge)
+	} else {
+		buf.WriteString(" TXT")
+	}
 	buf.WriteString("\nsend\n")
 
 	log.Printf("Sending nsupdate: `%v'", buf)
@@ -55,11 +62,13 @@ func main() {
 	flag.StringVar(&domain, "domain", "",
 		"domain for which to issue a wildcard certificate")
 	flag.StringVar(&accountFile, "accountfile", "account.json",
-		"file fort the account json data (will create new file if none exists)")
+		"file for the account json data (will create new file if none exists)")
 	flag.StringVar(&certFile, "certfile", "cert.pem",
 		"file for the pem encoded certificate chain")
 	flag.StringVar(&keyFile, "keyfile", "privkey.pem",
 		"file for the pem encoded certificate private key")
+	flag.StringVar(&nsKeyFile, "nskeyfile", "nsupdate.key",
+		"file for the nsupdate key")
 	flag.Parse()
 
 	// check domains are provided
@@ -98,6 +107,10 @@ func main() {
 	}
 	log.Printf("Order created: %s", order.URL)
 
+	rr := bytes.NewBufferString("_acme-challenge.")
+	rr.WriteString(domain)
+	rr.WriteString(".")
+
 	// loop through each of the provided authorization urls
 	for _, authURL := range order.Authorizations {
 		// fetch the authorization data from the acme service given the provided authorization url
@@ -113,10 +126,7 @@ func main() {
 			log.Fatalf("Unable to find dns challenge for auth %s", auth.Identifier.Value)
 		}
 
-		rr := bytes.NewBufferString("_acme-challenge.")
-		rr.WriteString(domain)
-		rr.WriteString(".")
-		err = nsUpdate(rr.String(), acme.EncodeDNS01KeyAuthorization(chal.KeyAuthorization))
+		err = nsUpdate(rr.String(), acme.EncodeDNS01KeyAuthorization(chal.KeyAuthorization), "add")
 		if err != nil {
 			log.Fatalf("Error nsupdating authorization %s challenge: %v", auth.Identifier.Value, err)
 		}
@@ -198,6 +208,9 @@ func main() {
 		log.Fatalf("Error writing certificate file %q: %v", certFile, err)
 	}
 
+	if err := nsUpdate(rr.String(), "", "delete"); err != nil {
+		log.Fatalf("error deleting nsupdate record: `%v'", err)
+	}
 	log.Printf("Done.")
 }
 
