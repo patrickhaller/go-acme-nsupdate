@@ -60,7 +60,7 @@ func main() {
 	flag.StringVar(&contactsList, "contact", "",
 		"comma separated contact emails to use when creating a new account (optional, dont include 'mailto:' prefix)")
 	flag.StringVar(&domain, "domain", "",
-		"domain for which to issue a wildcard certificate")
+		"domain for which to issue a certificate")
 	flag.StringVar(&accountFile, "accountfile", "account.json",
 		"file for the account json data (will create new file if none exists)")
 	flag.StringVar(&certFile, "certfile", "cert.pem",
@@ -107,8 +107,12 @@ func main() {
 	}
 	log.Printf("Order created: %s", order.URL)
 
+	// setup the rr we need to create
+	idx := strings.Index(domainList[0], ".")
+	nsDomain := domainList[0][idx+1:]
+
 	rr := bytes.NewBufferString("_acme-challenge.")
-	rr.WriteString(domain)
+	rr.WriteString(nsDomain)
 	rr.WriteString(".")
 
 	// loop through each of the provided authorization urls
