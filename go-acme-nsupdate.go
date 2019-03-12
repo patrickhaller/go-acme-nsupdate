@@ -71,7 +71,6 @@ func main() {
 		"file for the nsupdate key")
 	flag.Parse()
 
-	// check domains are provided
 	if domain == "" {
 		log.Fatal("No domain provided")
 	}
@@ -99,7 +98,6 @@ func main() {
 
 	domainList := strings.Split(domain, ",")
 
-	// create a new order with the acme service given the provided identifiers
 	log.Printf("Creating new order for domain: %s", domain)
 	order, err := client.NewOrder(account, acmeIDs)
 	if err != nil {
@@ -115,9 +113,8 @@ func main() {
 	rr.WriteString(nsDomain)
 	rr.WriteString(".")
 
-	// loop through each of the provided authorization urls
 	for _, authURL := range order.Authorizations {
-		// fetch the authorization data from the acme service given the provided authorization url
+
 		log.Printf("Fetching authorization: %s", authURL)
 		auth, err := client.FetchAuthorization(account, authURL)
 		if err != nil {
@@ -135,7 +132,6 @@ func main() {
 			log.Fatalf("Error nsupdating authorization %s challenge: %v", auth.Identifier.Value, err)
 		}
 
-		// update the acme server that the challenge file is ready to be queried
 		log.Printf("Updating challenge for authorization %s: %s", auth.Identifier.Value, chal.URL)
 		chal, err = client.UpdateChallenge(account, chal)
 		if err != nil {
@@ -144,9 +140,6 @@ func main() {
 		log.Printf("Challenge updated")
 	}
 
-	// all the challenges should now be completed
-
-	// create a csr for the new certificate
 	log.Printf("Generating certificate private key")
 	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -158,7 +151,6 @@ func main() {
 		log.Fatalf("Error encoding certificate key file: %v", err)
 	}
 
-	// write the key to the key file as a pem encoded key
 	log.Printf("Writing key file: %s", keyFile)
 	if err := ioutil.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
 		Type:  "EC PRIVATE KEY",
@@ -167,7 +159,6 @@ func main() {
 		log.Fatalf("Error writing key file %q: %v", keyFile, err)
 	}
 
-	// create the new csr template
 	log.Printf("Creating csr")
 	tpl := &x509.CertificateRequest{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
@@ -185,21 +176,18 @@ func main() {
 		log.Fatalf("Error parsing certificate request: %v", err)
 	}
 
-	// finalize the order with the acme server given a csr
 	log.Printf("Finalising order: %s", order.URL)
 	order, err = client.FinalizeOrder(account, order, csr)
 	if err != nil {
 		log.Fatalf("Error finalizing order: %v", err)
 	}
 
-	// fetch the certificate chain from the finalized order provided by the acme server
 	log.Printf("Fetching certificate: %s", order.Certificate)
 	certs, err := client.FetchCertificates(account, order.Certificate)
 	if err != nil {
 		log.Fatalf("Error fetching order certificates: %v", err)
 	}
 
-	// write the pem encoded certificate chain to file
 	log.Printf("Saving certificate to: %s", certFile)
 	var pemData []string
 	for _, c := range certs {
