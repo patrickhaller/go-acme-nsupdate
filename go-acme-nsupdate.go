@@ -55,8 +55,8 @@ func nsUpdate(rr string, challenge string, addDelete string) error {
 }
 
 func main() {
-	flag.StringVar(&directoryURL, "dirurl", acme.LetsEncryptStaging,
-		"acme directory url - defaults to lets encrypt v2 staging url if not provided")
+	flag.StringVar(&directoryURL, "dirurl", acme.LetsEncryptProduction,
+		"acme directory url - defaults to lets encrypt v2 production URL")
 	flag.StringVar(&contactsList, "contact", "",
 		"comma separated contact emails to use when creating a new account (optional, dont include 'mailto:' prefix)")
 	flag.StringVar(&domain, "domain", "",
