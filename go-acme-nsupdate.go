@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/patrickhaller/acme"
 )
@@ -96,23 +97,17 @@ func main() {
 	logD("Account url: %s", account.URL)
 
 	var acmeIDs []acme.Identifier
-	acmeIDs = append(acmeIDs, acme.Identifier{Type: "dns", Value: domainList[0]})
+	for _, domain := range domainList {
+		acmeIDs = append(acmeIDs, acme.Identifier{Type: "dns", Value: domain})
+	}
 
 	order, err := client.NewOrder(account, acmeIDs)
 	if err != nil {
-		log.Fatalf("Error creating new order for domain `%s': %v", domainList[0], err)
+		log.Fatalf("Error creating new order for domain `%v': %v", domainList, err)
 	}
 	logD("Order created: %s", order.URL)
 
-	nsDomain := domainList[0]
-	if strings.HasPrefix(domainList[0], "*.") {
-		idx := strings.Index(domainList[0], ".")
-		nsDomain = domainList[0][idx+1:]
-	}
-	rr := fmt.Sprintf("_acme-challenge.%s.", nsDomain)
-	logD("Using nsupdate domain `%s'", nsDomain)
-
-	for _, authURL := range order.Authorizations {
+	for i, authURL := range order.Authorizations {
 		logD("Fetching authorization: %s", authURL)
 		auth, err := client.FetchAuthorization(account, authURL)
 		if err != nil {
@@ -125,17 +120,27 @@ func main() {
 			log.Fatalf("Unable to find dns challenge for auth %s", auth.Identifier.Value)
 		}
 
+		nsDomain := domainList[i]
+		if strings.HasPrefix(domainList[i], "*.") {
+			idx := strings.Index(domainList[i], ".")
+			nsDomain = domainList[i][idx+1:]
+		}
+		rr := fmt.Sprintf("_acme-challenge.%s.", nsDomain)
+		logD("Using nsupdate domain `%s'", nsDomain)
+
 		logD("Sending nsupdate request")
 		err = nsUpdate(rr, acme.EncodeDNS01KeyAuthorization(chal.KeyAuthorization), "add")
 		if err != nil {
 			log.Fatalf("Error nsupdating authorization %s challenge: %v", auth.Identifier.Value, err)
 		}
+		time.Sleep(1 * time.Second)
 
 		logD("Updating challenge")
 		chal, err = client.UpdateChallenge(account, chal)
 		if err != nil {
 			log.Fatalf("Error updating authorization %s challenge url `%s': %v", auth.Identifier.Value, chal.URL, err)
 		}
+
 	}
 
 	logD("Generating certificate private key")
@@ -197,9 +202,12 @@ func main() {
 		log.Fatalf("Error writing certificate file %q: %v", certFile, err)
 	}
 
-	if err := nsUpdate(rr, "", "delete"); err != nil {
-		log.Fatalf("error deleting nsupdate record: `%v'", err)
+	for _, domain := range domainList {
+		if err := nsUpdate(domain, "", "delete"); err != nil {
+			log.Fatalf("error deleting nsupdate record: `%v'", err)
+		}
 	}
+
 	logD("Done.")
 }
 
