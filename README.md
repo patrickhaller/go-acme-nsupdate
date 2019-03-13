@@ -2,6 +2,7 @@ golang acme v2 client using nsupdate for the DNS-01 challenge
 
 USAGE:                
 
+```
  go-acme-nsupdate [OPTIONS] HOSTNAME [HOSTNAME ...]            
 
   for wildcard certs set HOSTNAME to the domainname                                     
@@ -18,3 +19,4 @@ USAGE:
         enable verbose output / debugging   
   -wild               
         make a wildcard cert                
+```
