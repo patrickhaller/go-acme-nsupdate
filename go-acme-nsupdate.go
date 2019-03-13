@@ -29,11 +29,14 @@ var (
 	nsKeyFile    string
 	isDebug      bool
 	isTesting    bool
+	isWildcard   bool
 )
 
 var directoryURL = acme.LetsEncryptProduction
 var certFileFmt = "%s.pem"
 var keyFileFmt = "%s-privkey.pem"
+var certFile = ""
+var keyFile = ""
 
 type acmeAccountFile struct {
 	PrivateKey *ecdsa.PrivateKey `json:"privateKey"`
@@ -42,11 +45,13 @@ type acmeAccountFile struct {
 
 var usageFmt = `USAGE: 
  %s [OPTIONS] HOSTNAME [HOSTNAME ...] 
-  for wildcard certs use '*.example.com' for the HOSTNAME
+  for wildcard certs set HOSTNAME to the domainname
 
 `
 
 func parseCmdLineFlags() {
+	flag.BoolVar(&isWildcard, "wild", false,
+		"make a wildcard cert")
 	flag.BoolVar(&isDebug, "v", false,
 		"\nenable verbose output / debugging")
 	flag.BoolVar(&isTesting, "test", false,
@@ -66,6 +71,13 @@ func parseCmdLineFlags() {
 	if len(domainList) == 0 {
 		log.Fatal("No domains provided")
 	}
+	certFile = fmt.Sprintf(certFileFmt, domainList[0])
+	keyFile = fmt.Sprintf(keyFileFmt, domainList[0])
+	if isWildcard {
+		for i, domain := range domainList {
+			domainList[i] = fmt.Sprintf("*.%s", domain)
+		}
+	}
 }
 
 func main() {
@@ -75,8 +87,6 @@ func main() {
 	if isTesting {
 		directoryURL = acme.LetsEncryptStaging
 	}
-	var certFile = fmt.Sprintf(certFileFmt, domainList[0])
-	var keyFile = fmt.Sprintf(keyFileFmt, domainList[0])
 
 	client, err := acme.NewClient(directoryURL)
 	if err != nil {
