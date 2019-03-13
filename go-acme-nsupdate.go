@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -20,138 +21,133 @@ import (
 )
 
 var (
-	webroot      string
-	domain       string
-	directoryURL string
+	domainList   []string
 	contactsList string
 	accountFile  string
-	certFile     string
-	keyFile      string
 	nsKeyFile    string
+	isDebug      bool
+	isTesting    bool
 )
+
+var directoryURL = acme.LetsEncryptProduction
+var certFileFmt = "%s.pem"
+var keyFileFmt = "%s-privkey.pem"
 
 type acmeAccountFile struct {
 	PrivateKey *ecdsa.PrivateKey `json:"privateKey"`
 	URL        string            `json:"url"`
 }
 
-func nsUpdate(rr string, challenge string, addDelete string) error {
-	cmd := exec.Command("nsupdate", "-v", "-k", nsKeyFile)
-	buf := bytes.NewBufferString("update ")
-	buf.WriteString(addDelete)
-	buf.WriteString(" ")
-	buf.WriteString(rr)
-	if addDelete == "add" {
-		buf.WriteString(" 300 TXT ")
-		buf.WriteString(challenge)
-	} else {
-		buf.WriteString(" TXT")
-	}
-	buf.WriteString("\nsend\n")
+var usageFmt = `USAGE: 
+ %s [OPTIONS] HOSTNAME [HOSTNAME ...] 
+  for wildcard certs use '*.example.com' for the HOSTNAME
 
-	log.Printf("Sending nsupdate: `%v'", buf)
-	cmd.Stdin = strings.NewReader(buf.String())
-	return cmd.Run()
+`
+
+func parseCmdLineFlags() {
+	flag.BoolVar(&isDebug, "v", false,
+		"\nenable verbose output / debugging")
+	flag.BoolVar(&isTesting, "test", false,
+		"run against LetsEncrypt staging, not production servers")
+	flag.StringVar(&contactsList, "contact", "",
+		"comma separated contact emails to use for new accounts")
+	flag.StringVar(&accountFile, "accountfile", "account.json",
+		"file of account data -- will be auto-created if unset)")
+	flag.StringVar(&nsKeyFile, "nskey", "nsupdate.key",
+		"file for the nsupdate key")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), usageFmt, os.Args[0])
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+	domainList = flag.Args()
+	if len(domainList) == 0 {
+		log.Fatal("No domains provided")
+	}
 }
 
 func main() {
-	flag.StringVar(&directoryURL, "dirurl", acme.LetsEncryptProduction,
-		"acme directory url - defaults to lets encrypt v2 production URL")
-	flag.StringVar(&contactsList, "contact", "",
-		"comma separated contact emails to use when creating a new account (optional, dont include 'mailto:' prefix)")
-	flag.StringVar(&domain, "domain", "",
-		"domain for which to issue a certificate")
-	flag.StringVar(&accountFile, "accountfile", "account.json",
-		"file for the account json data (will create new file if none exists)")
-	flag.StringVar(&certFile, "certfile", "cert.pem",
-		"file for the pem encoded certificate chain")
-	flag.StringVar(&keyFile, "keyfile", "privkey.pem",
-		"file for the pem encoded certificate private key")
-	flag.StringVar(&nsKeyFile, "nskeyfile", "nsupdate.key",
-		"file for the nsupdate key")
-	flag.Parse()
+	parseCmdLineFlags()
+	log.SetFlags(0)
 
-	if domain == "" {
-		log.Fatal("No domain provided")
+	if isTesting {
+		directoryURL = acme.LetsEncryptStaging
 	}
+	var certFile = fmt.Sprintf(certFileFmt, domainList[0])
+	var keyFile = fmt.Sprintf(keyFileFmt, domainList[0])
 
-	log.Printf("Connecting to acme directory url: %s", directoryURL)
 	client, err := acme.NewClient(directoryURL)
 	if err != nil {
-		log.Fatalf("Error connecting to acme directory: %v", err)
+		log.Fatalf("Error connecting to acme directory(%s): %v", directoryURL, err)
 	}
 
-	log.Printf("Loading account file %s", accountFile)
-	account, err := loadAccount(client)
-	if err != nil {
-		log.Printf("Error loading existing account: %v", err)
-		log.Printf("Creating new account")
-		account, err = createAccount(client)
-		if err != nil {
-			log.Fatalf("Error creaing new account: %v", err)
+	var account acme.Account
+	if _, err := os.Stat(accountFile); err == nil {
+		if account, err = loadAccount(client); err != nil {
+			log.Fatalf("Error loading existing account: %v", err)
+		}
+	} else {
+		logD("Creating new account")
+		if account, err = createAccount(client); err != nil {
+			log.Fatalf("Error creating new account: %v", err)
 		}
 	}
-	log.Printf("Account url: %s", account.URL)
+	logD("Account url: %s", account.URL)
 
 	var acmeIDs []acme.Identifier
-	acmeIDs = append(acmeIDs, acme.Identifier{Type: "dns", Value: domain})
+	acmeIDs = append(acmeIDs, acme.Identifier{Type: "dns", Value: domainList[0]})
 
-	domainList := strings.Split(domain, ",")
-
-	log.Printf("Creating new order for domain: %s", domain)
 	order, err := client.NewOrder(account, acmeIDs)
 	if err != nil {
-		log.Fatalf("Error creating new order: %v", err)
+		log.Fatalf("Error creating new order for domain `%s': %v", domainList[0], err)
 	}
-	log.Printf("Order created: %s", order.URL)
+	logD("Order created: %s", order.URL)
 
-	// setup the rr we need to create
-	idx := strings.Index(domainList[0], ".")
-	nsDomain := domainList[0][idx+1:]
-
-	rr := bytes.NewBufferString("_acme-challenge.")
-	rr.WriteString(nsDomain)
-	rr.WriteString(".")
+	nsDomain := domainList[0]
+	if strings.HasPrefix(domainList[0], "*.") {
+		idx := strings.Index(domainList[0], ".")
+		nsDomain = domainList[0][idx+1:]
+	}
+	rr := fmt.Sprintf("_acme-challenge.%s.", nsDomain)
+	logD("Using nsupdate domain `%s'", nsDomain)
 
 	for _, authURL := range order.Authorizations {
-
-		log.Printf("Fetching authorization: %s", authURL)
+		logD("Fetching authorization: %s", authURL)
 		auth, err := client.FetchAuthorization(account, authURL)
 		if err != nil {
 			log.Fatalf("Error fetching authorization url %q: %v", authURL, err)
 		}
-		log.Printf("Fetched authorization: %s", auth.Identifier.Value)
+		logD("Fetched authorization: %s", auth.Identifier.Value)
 
 		chal, ok := auth.ChallengeMap[acme.ChallengeTypeDNS01]
 		if !ok {
 			log.Fatalf("Unable to find dns challenge for auth %s", auth.Identifier.Value)
 		}
 
-		err = nsUpdate(rr.String(), acme.EncodeDNS01KeyAuthorization(chal.KeyAuthorization), "add")
+		logD("Sending nsupdate request")
+		err = nsUpdate(rr, acme.EncodeDNS01KeyAuthorization(chal.KeyAuthorization), "add")
 		if err != nil {
 			log.Fatalf("Error nsupdating authorization %s challenge: %v", auth.Identifier.Value, err)
 		}
 
-		log.Printf("Updating challenge for authorization %s: %s", auth.Identifier.Value, chal.URL)
+		logD("Updating challenge")
 		chal, err = client.UpdateChallenge(account, chal)
 		if err != nil {
-			log.Fatalf("Error updating authorization %s challenge: %v", auth.Identifier.Value, err)
+			log.Fatalf("Error updating authorization %s challenge url `%s': %v", auth.Identifier.Value, chal.URL, err)
 		}
-		log.Printf("Challenge updated")
 	}
 
-	log.Printf("Generating certificate private key")
+	logD("Generating certificate private key")
 	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatalf("Error generating certificate key: %v", err)
 	}
-	// encode the new ec private key
 	certKeyEnc, err := x509.MarshalECPrivateKey(certKey)
 	if err != nil {
 		log.Fatalf("Error encoding certificate key file: %v", err)
 	}
 
-	log.Printf("Writing key file: %s", keyFile)
+	logD("Writing key file: %s", keyFile)
 	if err := ioutil.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
 		Type:  "EC PRIVATE KEY",
 		Bytes: certKeyEnc,
@@ -159,12 +155,12 @@ func main() {
 		log.Fatalf("Error writing key file %q: %v", keyFile, err)
 	}
 
-	log.Printf("Creating csr")
+	logD("Creating csr")
 	tpl := &x509.CertificateRequest{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 		PublicKeyAlgorithm: x509.ECDSA,
 		PublicKey:          certKey.Public(),
-		Subject:            pkix.Name{CommonName: domain},
+		Subject:            pkix.Name{CommonName: domainList[0]},
 		DNSNames:           domainList,
 	}
 	csrDer, err := x509.CreateCertificateRequest(rand.Reader, tpl, certKey)
@@ -176,19 +172,19 @@ func main() {
 		log.Fatalf("Error parsing certificate request: %v", err)
 	}
 
-	log.Printf("Finalising order: %s", order.URL)
+	logD("Finalising order: %s", order.URL)
 	order, err = client.FinalizeOrder(account, order, csr)
 	if err != nil {
 		log.Fatalf("Error finalizing order: %v", err)
 	}
 
-	log.Printf("Fetching certificate: %s", order.Certificate)
+	logD("Fetching certificate: %s", order.Certificate)
 	certs, err := client.FetchCertificates(account, order.Certificate)
 	if err != nil {
 		log.Fatalf("Error fetching order certificates: %v", err)
 	}
 
-	log.Printf("Saving certificate to: %s", certFile)
+	logD("Saving certificate to: %s", certFile)
 	var pemData []string
 	for _, c := range certs {
 		pemData = append(pemData, strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{
@@ -200,22 +196,50 @@ func main() {
 		log.Fatalf("Error writing certificate file %q: %v", certFile, err)
 	}
 
-	if err := nsUpdate(rr.String(), "", "delete"); err != nil {
+	if err := nsUpdate(rr, "", "delete"); err != nil {
 		log.Fatalf("error deleting nsupdate record: `%v'", err)
 	}
-	log.Printf("Done.")
+	logD("Done.")
+}
+
+func nsUpdate(rr string, challenge string, addDelete string) error {
+	var input string
+	if addDelete == "add" {
+		input = fmt.Sprintf("update add %s 30 TXT %s\nsend\n", rr, challenge)
+	} else {
+		input = fmt.Sprintf("update delete %s TXT\nsend\n", rr)
+	}
+	logD("Sending nsupdate: `%v'", input)
+	cmd := exec.Command("nsupdate", "-v", "-k", nsKeyFile)
+	cmd.Stdin = strings.NewReader(input)
+	return cmd.Run()
+}
+
+func logD(fmt string, args ...interface{}) {
+	if isDebug == true {
+		log.Printf(fmt, args...)
+	}
 }
 
 func loadAccount(client acme.Client) (acme.Account, error) {
+	if _, err := os.Stat(accountFile); err != nil {
+		return acme.Account{}, err
+	}
 	raw, err := ioutil.ReadFile(accountFile)
 	if err != nil {
 		return acme.Account{}, err
 	}
+	var pp bytes.Buffer
+	json.Indent(&pp, raw, " ", "  ")
+	logD("accountFile contents =\n%s", pp.String())
+
 	var accountFile acmeAccountFile
 	if err := json.Unmarshal(raw, &accountFile); err != nil {
-		return acme.Account{}, fmt.Errorf("error reading account file %q: %v", accountFile, err)
+		return acme.Account{}, fmt.Errorf("error reading account file: %v", err)
 	}
-	account, err := client.UpdateAccount(acme.Account{PrivateKey: accountFile.PrivateKey, URL: accountFile.URL}, true, getContacts()...)
+
+	acct := acme.Account{PrivateKey: accountFile.PrivateKey, URL: accountFile.URL}
+	account, err := client.UpdateAccount(acct, true, getContacts()...)
 	if err != nil {
 		return acme.Account{}, fmt.Errorf("error updating existing account: %v", err)
 	}
