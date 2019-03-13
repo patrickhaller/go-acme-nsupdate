@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"strings"
@@ -205,13 +206,13 @@ func main() {
 func nsUpdate(rr string, challenge string, addDelete string) error {
 	var input string
 	if addDelete == "add" {
-		input = fmt.Sprintf("update add %s 30 TXT %s\nsend\n", rr, challenge)
+		input = fmt.Sprintf("update add %s 1 TXT %s", rr, challenge)
 	} else {
-		input = fmt.Sprintf("update delete %s TXT\nsend\n", rr)
+		input = fmt.Sprintf("update delete %s TXT", rr)
 	}
 	logD("Sending nsupdate: `%v'", input)
 	cmd := exec.Command("nsupdate", "-v", "-k", nsKeyFile)
-	cmd.Stdin = strings.NewReader(input)
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s\nsend\n", input))
 	return cmd.Run()
 }
 
@@ -219,6 +220,24 @@ func logD(fmt string, args ...interface{}) {
 	if isDebug == true {
 		log.Printf(fmt, args...)
 	}
+}
+
+/* elliptic Curve cannot be unmarshal'ed, so we fake it */
+
+type fakeCurve struct {
+	P, N, B, Gx, Gy *big.Int
+	BitSize         int
+	Name            string
+}
+
+type fakePrivateKey struct {
+	D, X, Y *big.Int
+	Curve   *fakeCurve
+}
+
+type fakeAccountFile struct {
+	URL        string         `json:"url"`
+	PrivateKey fakePrivateKey `json:"privateKey"`
 }
 
 func loadAccount(client acme.Client) (acme.Account, error) {
@@ -233,12 +252,18 @@ func loadAccount(client acme.Client) (acme.Account, error) {
 	json.Indent(&pp, raw, " ", "  ")
 	logD("accountFile contents =\n%s", pp.String())
 
-	var accountFile acmeAccountFile
-	if err := json.Unmarshal(raw, &accountFile); err != nil {
+	var faf fakeAccountFile
+	if err := json.Unmarshal(raw, &faf); err != nil {
 		return acme.Account{}, fmt.Errorf("error reading account file: %v", err)
 	}
 
-	acct := acme.Account{PrivateKey: accountFile.PrivateKey, URL: accountFile.URL}
+	var apkey ecdsa.PrivateKey
+	apkey.D = faf.PrivateKey.D
+	apkey.X = faf.PrivateKey.X
+	apkey.Y = faf.PrivateKey.Y
+	apkey.Curve = elliptic.P256()
+
+	acct := acme.Account{PrivateKey: &apkey, URL: faf.URL}
 	account, err := client.UpdateAccount(acct, true, getContacts()...)
 	if err != nil {
 		return acme.Account{}, fmt.Errorf("error updating existing account: %v", err)
