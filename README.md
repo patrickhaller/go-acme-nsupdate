@@ -11,6 +11,8 @@ USAGE:
         file of account data -- will be auto-created if unset) (default "account.json") 
   -contact string     
         comma separated contact emails to use for new accounts                          
+  -ns string          
+        DNS server to query for the status of the nsupdate                              
   -nskey string       
         file for the nsupdate key (default "nsupdate.key")                              
   -test               
