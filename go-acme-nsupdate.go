@@ -27,6 +27,7 @@ var (
 	contactsList string
 	accountFile  string
 	nsKeyFile    string
+	nameServer   string
 	isDebug      bool
 	isTesting    bool
 	isWildcard   bool
@@ -60,6 +61,8 @@ func parseCmdLineFlags() {
 		"comma separated contact emails to use for new accounts")
 	flag.StringVar(&accountFile, "accountfile", "account.json",
 		"file of account data -- will be auto-created if unset)")
+	flag.StringVar(&nameServer, "ns", "",
+		"Secondary DNS server to query for the status of the nsupdate")
 	flag.StringVar(&nsKeyFile, "nskey", "nsupdate.key",
 		"file for the nsupdate key")
 	flag.Usage = func() {
@@ -117,7 +120,7 @@ func main() {
 	}
 	logD("Order created: %s", order.URL)
 
-	for i, authURL := range order.Authorizations {
+	for _, authURL := range order.Authorizations {
 		logD("Fetching authorization: %s", authURL)
 		auth, err := client.FetchAuthorization(account, authURL)
 		if err != nil {
@@ -130,10 +133,10 @@ func main() {
 			log.Fatalf("Unable to find dns challenge for auth %s", auth.Identifier.Value)
 		}
 
-		nsDomain := domainList[i]
-		if strings.HasPrefix(domainList[i], "*.") {
-			idx := strings.Index(domainList[i], ".")
-			nsDomain = domainList[i][idx+1:]
+		nsDomain := auth.Identifier.Value
+		if strings.HasPrefix(auth.Identifier.Value, "*.") {
+			idx := strings.Index(auth.Identifier.Value, ".")
+			nsDomain = auth.Identifier.Value[idx+1:]
 		}
 		rr := fmt.Sprintf("_acme-challenge.%s.", nsDomain)
 		logD("Using nsupdate domain `%s'", nsDomain)
@@ -143,7 +146,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error nsupdating authorization %s challenge: %v", auth.Identifier.Value, err)
 		}
-		time.Sleep(1 * time.Second)
 
 		logD("Updating challenge")
 		chal, err = client.UpdateChallenge(account, chal)
@@ -231,7 +233,22 @@ func nsUpdate(rr string, challenge string, addDelete string) error {
 	logD("Sending nsupdate: `%v'", input)
 	cmd := exec.Command("nsupdate", "-v", "-k", nsKeyFile)
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s\nsend\n", input))
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil || nameServer == "" {
+		return err
+	}
+
+	for i := 0; i < 5; i++ {
+		cmd = exec.Command("dig", "-k", nsKeyFile, "TXT", rr, fmt.Sprintf("@%s", nameServer))
+		out, _ := cmd.Output()
+		logD("dig output: %s", out)
+		if strings.Contains(string(out), challenge) {
+			return nil
+		}
+		logD("waiting on nameserver `%s` to see the nsupdate", nameServer)
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("too many retries looking for nsupdates")
 }
 
 func logD(fmt string, args ...interface{}) {
