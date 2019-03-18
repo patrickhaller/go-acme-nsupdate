@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -31,6 +32,9 @@ var (
 	isDebug      bool
 	isTesting    bool
 	isWildcard   bool
+	useRSA       bool
+	useECDSA     bool
+	rsaLength    int
 )
 
 var directoryURL = acme.LetsEncryptProduction
@@ -51,6 +55,12 @@ var usageFmt = `USAGE:
 `
 
 func parseCmdLineFlags() {
+	flag.IntVar(&rsaLength, "bits", 2048,
+		"the bit-length of the RSA private key")
+	flag.BoolVar(&useRSA, "rsa", false,
+		"use RSA")
+	flag.BoolVar(&useECDSA, "ecdsa", false,
+		"use ECDSA")
 	flag.BoolVar(&isWildcard, "wild", false,
 		"make a wildcard cert")
 	flag.BoolVar(&isDebug, "v", false,
@@ -70,6 +80,9 @@ func parseCmdLineFlags() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if useRSA == false && useECDSA == false {
+		useECDSA = true
+	}
 	domainList = flag.Args()
 	if len(domainList) == 0 {
 		log.Fatal("No domains provided")
@@ -156,31 +169,17 @@ func main() {
 	}
 
 	logD("Generating certificate private key")
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("Error generating certificate key: %v", err)
-	}
-	certKeyEnc, err := x509.MarshalECPrivateKey(certKey)
-	if err != nil {
-		log.Fatalf("Error encoding certificate key file: %v", err)
+	var certKey interface{}
+	var tpl *x509.CertificateRequest
+
+	if useECDSA {
+		certKey, tpl = mkCertECDSA()
+	} else if useRSA {
+		certKey, tpl = mkCertECDSA()
+	} else {
+		log.Fatalf("No valid certificate algorithm")
 	}
 
-	logD("Writing key file: %s", keyFile)
-	if err := ioutil.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: certKeyEnc,
-	}), 0600); err != nil {
-		log.Fatalf("Error writing key file %q: %v", keyFile, err)
-	}
-
-	logD("Creating csr")
-	tpl := &x509.CertificateRequest{
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
-		PublicKeyAlgorithm: x509.ECDSA,
-		PublicKey:          certKey.Public(),
-		Subject:            pkix.Name{CommonName: domainList[0]},
-		DNSNames:           domainList,
-	}
 	csrDer, err := x509.CreateCertificateRequest(rand.Reader, tpl, certKey)
 	if err != nil {
 		log.Fatalf("Error creating certificate request: %v", err)
@@ -334,4 +333,59 @@ func getContacts() []string {
 		}
 	}
 	return contacts
+}
+
+func mkCertECDSA() (*ecdsa.PrivateKey, *x509.CertificateRequest) {
+	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("Error generating certificate key: %v", err)
+	}
+	certKeyEnc, err := x509.MarshalECPrivateKey(certKey)
+	if err != nil {
+		log.Fatalf("Error encoding certificate key file: %v", err)
+	}
+
+	logD("Writing key file: %s", keyFile)
+	if err := ioutil.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: certKeyEnc,
+	}), 0600); err != nil {
+		log.Fatalf("Error writing key file %q: %v", keyFile, err)
+	}
+
+	logD("Creating csr")
+	tpl := &x509.CertificateRequest{
+		SignatureAlgorithm: x509.ECDSAWithSHA256,
+		PublicKeyAlgorithm: x509.ECDSA,
+		PublicKey:          certKey.Public(),
+		Subject:            pkix.Name{CommonName: domainList[0]},
+		DNSNames:           domainList,
+	}
+	return certKey, tpl
+}
+
+func mkCertRSA() (*rsa.PrivateKey, *x509.CertificateRequest) {
+	certKey, err := rsa.GenerateKey(rand.Reader, rsaLength)
+	if err != nil {
+		log.Fatalf("Error generating certificate key: %v", err)
+	}
+	certKeyEnc := x509.MarshalPKCS1PrivateKey(certKey)
+
+	logD("Writing key file: %s", keyFile)
+	if err := ioutil.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: certKeyEnc,
+	}), 0600); err != nil {
+		log.Fatalf("Error writing key file %q: %v", keyFile, err)
+	}
+
+	logD("Creating csr")
+	tpl := &x509.CertificateRequest{
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		PublicKeyAlgorithm: x509.RSA,
+		PublicKey:          certKey.Public(),
+		Subject:            pkix.Name{CommonName: domainList[0]},
+		DNSNames:           domainList,
+	}
+	return certKey, tpl
 }
