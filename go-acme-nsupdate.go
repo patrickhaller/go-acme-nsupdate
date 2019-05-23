@@ -39,7 +39,7 @@ var (
 
 var directoryURL = acme.LetsEncryptProduction
 var certFileFmt = "%s.pem"
-var keyFileFmt = "%s-privkey.pem"
+var keyFileFmt = "%s.key"
 var certFile = ""
 var keyFile = ""
 
