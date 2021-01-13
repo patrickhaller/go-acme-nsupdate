@@ -237,7 +237,7 @@ func nsUpdate(rr string, challenge string, addDelete string) error {
 		return err
 	}
 
-	for i := 0; i < 5; i++ {
+	for {
 		cmd = exec.Command("dig", "-k", nsKeyFile, "TXT", rr, fmt.Sprintf("@%s", nameServer))
 		out, _ := cmd.Output()
 		logD("dig output: %s", out)
